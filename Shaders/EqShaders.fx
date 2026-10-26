@@ -1,16 +1,21 @@
-// EqShaders MVP v0.1 - Classic WoW shader stack combining Photon-derived post processing
-// with ComfyAtmosphere as the world-space rendering backend.
+// EqShaders MVP v0.2 - Classic WoW shader stack combining Photon-derived post processing,
+// a clean-room Bliss-inspired fantasy look, and ComfyAtmosphere as the world-space backend.
 //
 // Architecture:
 //   WoW 1.12 -> ComfyAtmosphere (D3D9 world effects) -> DXVK -> Vulkan -> ReShade -> EqShaders
 //
 // ComfyAtmosphere owns real sun shadows, shadow maps, volumetric light, world fog, lamps,
-// water/grass/time-of-day features. EqShaders owns the Photon-derived final-image pipeline:
-// depth linearisation, GTAO, bloom, tonemap, colour grade, vignette, CAS and diagnostics.
+// water/grass/time-of-day features. EqShaders owns the final-image pipeline: depth
+// linearisation, GTAO, bloom, tonemap, colour grade, optional fantasy look, vignette,
+// CAS and diagnostics.
 //
 // Photon Shaders (c) 2021-2025 Benjamin Stott "SixthSurge". Ported maths remains subject
 // to PHOTON_LICENSE.txt. ComfyAtmosphere is a separate GPL-3.0 component downloaded from
 // its upstream release by the EqShaders installer; see THIRD_PARTY.md.
+//
+// Bliss Shaders is All Rights Reserved. EqShaders does NOT include or port Bliss/Chocapic
+// source. The selectable Bliss-inspired look is an independently authored clean-room
+// approximation of publicly observable visual characteristics.
 //
 // Duplicate screen-space fog/shafts/DOF/SSR are intentionally off by default in EqShaders.ini.
 // Start with Debug view = Contact sheet when validating a new client/depth setup.
@@ -27,6 +32,7 @@
 #include "PhotonWoW/DOF.fxh"
 #include "PhotonWoW/Bloom.fxh"
 #include "PhotonWoW/Sharpen.fxh"
+#include "EqShaders/BlissInspired.fxh"
 
 float4 PS_Prep(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 {
@@ -131,16 +137,23 @@ float4 PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
     float3 scene = tex2Dlod(PW_SceneFinal, float4(uv, 0, 0)).rgb;
 
 #if PW_ENABLE_BLOOM
-    float bloom_intensity = 0.12 * BloomIntensity;
+    // The clean-room fantasy mode increases bloom energy slightly, matching the softer,
+    // luminous presentation we are targeting without changing the Photon bloom pyramid.
+    float bloom_intensity = 0.12 * BloomIntensity * eq_fantasy_bloom_gain();
     scene = lerp(scene, pw_get_bloom(uv), bloom_intensity);
 #endif
 
     scene *= Exposure;
     scene *= pw_vignette(uv);
+
+    // Clean-room Bliss-inspired split-toning/contrast is deliberately applied BEFORE the
+    // existing Photon grade+tonemap, so the underlying Photon maths stays intact/selectable.
+    scene = eq_fantasy_pre_tonemap(scene);
     scene = pw_grade_input(scene);
     scene = pw_tonemap(scene);
     scene = saturate(mul(PW_REC2020_TO_REC709, scene));
     scene = pw_grade_output(scene);
+    scene = eq_fantasy_post_grade(scene);
 
     return float4(pw_display_eotf(scene), 1.0);
 }
@@ -164,7 +177,7 @@ float4 PS_Final(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 
 technique EqShaders <
     ui_label = "EqShaders";
-    ui_tooltip = "EqShaders MVP: ComfyAtmosphere world lighting + Photon-derived ReShade post pipeline for Classic WoW.";
+    ui_tooltip = "EqShaders MVP: ComfyAtmosphere world lighting + Photon-derived post pipeline + optional clean-room Bliss-inspired fantasy look.";
 >
 {
     pass DepthLinearise { VertexShader = PW_VS; PixelShader = PS_LinearDepth; RenderTarget = PW_DepthLinTex; }
