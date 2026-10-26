@@ -99,8 +99,9 @@ float3 eq_fantasy_pre_tonemap(float3 c)
     // ComfyAtmosphere already supplies the actual world-space light and shadow behaviour.
     float3 cool_tint = float3(0.90, 0.975, 1.10);
     float3 warm_tint = float3(1.09, 1.015, 0.91);
-    c *= lerp(1.0.xxx, cool_tint, shadow * EqFantasyCoolShadows * amount);
-    c *= lerp(1.0.xxx, warm_tint, highlight * EqFantasyWarmHighlights * amount);
+    float3 neutral = float3(1.0, 1.0, 1.0);
+    c *= lerp(neutral, cool_tint, shadow * EqFantasyCoolShadows * amount);
+    c *= lerp(neutral, warm_tint, highlight * EqFantasyWarmHighlights * amount);
 
     // Lift the deepest shadows very slightly instead of crushing them. The blue-biased lift
     // helps distant/rainy scenes retain atmospheric colour rather than becoming grey/black.
