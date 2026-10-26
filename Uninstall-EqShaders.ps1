@@ -26,7 +26,8 @@ $remove = @(
     (Join-Path $WoWPath 'EqShaders.ini'),
     (Join-Path $WoWPath 'Launch_EqShaders.bat'),
     (Join-Path $WoWPath 'reshade-shaders\Shaders\EqShaders.fx'),
-    (Join-Path $WoWPath 'reshade-shaders\Shaders\PhotonWoW')
+    (Join-Path $WoWPath 'reshade-shaders\Shaders\PhotonWoW'),
+    (Join-Path $WoWPath 'reshade-shaders\Shaders\EqShaders')
 )
 foreach ($p in $remove) {
     if (Test-Path $p) {
