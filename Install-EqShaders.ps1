@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$EqVersion = '0.1.0-mvp'
+$EqVersion = '0.2.0-mvp'
 $ComfyVersion = 'v0.17.1-alpha'
 $ComfyCommit = '73bebaaf2439aa17cc7766bb99bf8513f9aa6ade'
 $ComfyUrl = 'https://github.com/aloofbit/comfyatmosphere/releases/download/v0.17.1-alpha/comfyatmosphere-v0.17.1-alpha.zip'
@@ -25,16 +25,18 @@ if (-not (Test-Path (Join-Path $WoWPath 'WoW.exe'))) {
 
 $ShaderSource = Join-Path $SourceRoot 'Shaders'
 $EqFxSource = Join-Path $ShaderSource 'EqShaders.fx'
-$HeaderSource = Join-Path $ShaderSource 'PhotonWoW'
+$PhotonHeaderSource = Join-Path $ShaderSource 'PhotonWoW'
+$EqHeaderSource = Join-Path $ShaderSource 'EqShaders'
 $PresetSource = Join-Path $SourceRoot 'EqShaders.ini'
 
-foreach ($Required in @($EqFxSource, $HeaderSource, $PresetSource)) {
+foreach ($Required in @($EqFxSource, $PhotonHeaderSource, $EqHeaderSource, $PresetSource)) {
     if (-not (Test-Path $Required)) { throw "Missing EqShaders package file: $Required" }
 }
 
 $StateDir = Join-Path $WoWPath 'EqShaders'
 $ShaderDest = Join-Path $WoWPath 'reshade-shaders\Shaders'
-$HeaderDest = Join-Path $ShaderDest 'PhotonWoW'
+$PhotonHeaderDest = Join-Path $ShaderDest 'PhotonWoW'
+$EqHeaderDest = Join-Path $ShaderDest 'EqShaders'
 $PresetDest = Join-Path $WoWPath 'EqShaders.ini'
 $ManifestPath = Join-Path $StateDir 'install.json'
 Ensure-Dir $StateDir
@@ -42,8 +44,10 @@ Ensure-Dir $ShaderDest
 
 Say "Installing EqShaders $EqVersion into $WoWPath"
 Copy-Item $EqFxSource (Join-Path $ShaderDest 'EqShaders.fx') -Force
-if (Test-Path $HeaderDest) { Remove-Item $HeaderDest -Recurse -Force }
-Copy-Item $HeaderSource $HeaderDest -Recurse -Force
+if (Test-Path $PhotonHeaderDest) { Remove-Item $PhotonHeaderDest -Recurse -Force }
+Copy-Item $PhotonHeaderSource $PhotonHeaderDest -Recurse -Force
+if (Test-Path $EqHeaderDest) { Remove-Item $EqHeaderDest -Recurse -Force }
+Copy-Item $EqHeaderSource $EqHeaderDest -Recurse -Force
 Copy-Item $PresetSource $PresetDest -Force
 if (Test-Path (Join-Path $SourceRoot 'PHOTON_LICENSE.txt')) {
     Copy-Item (Join-Path $SourceRoot 'PHOTON_LICENSE.txt') (Join-Path $StateDir 'PHOTON_LICENSE.txt') -Force
@@ -171,7 +175,8 @@ $Manifest = [ordered]@{
         'EqShaders.ini',
         'Launch_EqShaders.bat',
         'reshade-shaders\Shaders\EqShaders.fx',
-        'reshade-shaders\Shaders\PhotonWoW'
+        'reshade-shaders\Shaders\PhotonWoW',
+        'reshade-shaders\Shaders\EqShaders'
     )
 }
 $Manifest | ConvertTo-Json -Depth 4 | Set-Content $ManifestPath -Encoding UTF8
@@ -181,4 +186,5 @@ Say "Launcher: $LauncherPath"
 Say "ReShade Vulkan layer: $ReShadeState"
 Say "VanillaFixes: $VanillaFixesState"
 Say 'In ReShade, select EqShaders.ini and enable EqShaders [EqShaders.fx].'
+Say 'Visual style defaults to Bliss-inspired hybrid (clean-room); choose Photon base under EqShaders look for A/B comparison.'
 Say 'For first in-world validation: Home -> EqShaders -> Debug / calibration -> Debug view -> Contact sheet.'
