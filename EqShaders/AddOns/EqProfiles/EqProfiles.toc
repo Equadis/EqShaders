@@ -1,0 +1,10 @@
+## Interface: 11200
+## Title: EqProfiles
+## Notes: Authored environment profiles for ComfyAtmosphere: picks fog, light, shadow and water settings per zone, indoors and time of day, and fades between them. Needs comfyatmos.dll.
+## Author: EqShaders
+## SavedVariables: EqProfilesDB
+## Dependencies: ComfyAtmosphere
+
+ProfileSchema.lua
+ProfileData.lua
+EqProfiles.lua

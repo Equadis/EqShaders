@@ -98,6 +98,10 @@ def convert(src):
     for name in re.findall(r'^float\s+(PS_\w+)\s*\(', s, flags=re.M):
         s = re.sub(r'^float\s+' + name + r'\s*\(([^)]*)\)\s*:\s*COLOR0', "float " + name + r"_1ch(\1)", s, flags=re.M)
         s += "\nfloat4 " + name + "(float2 pos : VPOS, float2 uv : TEXCOORD0) : COLOR0 { return " + name + "_1ch(pos, uv).xxxx; }\n"
+    # two-channel targets (RG16F): same wrap, widened to float4
+    for name in re.findall(r'^float2\s+(PS_\w+)\s*\(', s, flags=re.M):
+        s = re.sub(r'^float2\s+' + name + r'\s*\(([^)]*)\)\s*:\s*COLOR0', "float2 " + name + r"_2ch(\1)", s, flags=re.M)
+        s += "\nfloat4 " + name + "(float2 pos : VPOS, float2 uv : TEXCOORD0) : COLOR0 { return float4(" + name + "_2ch(pos, uv), 0, 1); }\n"
     return s
 
 
@@ -111,9 +115,12 @@ def blob_text(p):
 
 
 def main():
+    PROFILE = b"ps_3_0"
+    for _a in sys.argv[2:]:
+        if _a.startswith('--profile='): PROFILE = _a.split('=',1)[1].encode()
     path = sys.argv[1]
     defines = ""
-    for a in sys.argv[2:]:
+    for a in [x for x in sys.argv[2:] if not x.startswith('--profile=')]:
         if a.startswith("-D"):
             defines += "#define " + a[2:].replace("=", " ", 1) + "\n"
     pre = ("#define BUFFER_WIDTH 1920\n#define BUFFER_HEIGHT 1080\n"
@@ -132,7 +139,7 @@ def main():
     bad, seen = 0, set()
     for e in entries:
         code, err = ctypes.c_void_p(), ctypes.c_void_p()
-        hr = d3d.D3DCompile(b, len(b), b"flat.hlsl", None, None, e.encode(), b"ps_3_0", 0, 0,
+        hr = d3d.D3DCompile(b, len(b), b"flat.hlsl", None, None, e.encode(), PROFILE, 0, 0,
                             ctypes.byref(code), ctypes.byref(err))
         if hr < 0:
             bad += 1

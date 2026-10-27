@@ -16,6 +16,7 @@
 
 #define NOMINMAX
 #include <windows.h>
+#include <tlhelp32.h>
 #include <reshade.hpp>
 #include <atomic>
 #include <cstdio>
@@ -162,12 +163,79 @@ namespace
     // need is made by hand: vtable slot 10 of effect_runtime (api_object 4 + get_device + get_hwnd, get_back_buffer,
     // get_back_buffer_count, get_current_back_buffer_index, get_command_queue = render_effects), __thiscall.
     typedef void(__attribute__((thiscall)) *render_effects_fn)(void *self, void *cmd_list, uint64_t rtv, uint64_t rtv_srgb);
+    // ---- watchdog: if render_effects does not return within 1.5 s, dump every thread's stack to the log (module!offset of
+    // anything on the stack that points into executable code) so the place it is stuck in can be read without a debugger.
+    volatile LONG g_call_active = 0;
+    volatile DWORD g_call_start = 0;
+    DWORD g_call_tid = 0;
+    volatile LONG g_dumped = 0;
+
+    void dump_thread(DWORD tid, const char *tag)
+    {
+        HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
+        if (!h) { logf("  thread %lu: cannot open", tid); return; }
+        if (SuspendThread(h) == (DWORD)-1) { CloseHandle(h); return; }
+        CONTEXT ctx = {}; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (GetThreadContext(h, &ctx))
+        {
+            logf("  thread %lu %s: eip %08lx esp %08lx", tid, tag, ctx.Eip, ctx.Esp);
+            const DWORD *sp = reinterpret_cast<const DWORD *>(ctx.Esp);
+            int shown = 0;
+            auto name_of = [](DWORD addr, char *out, size_t n) {
+                HMODULE m = nullptr;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCSTR>(addr), &m) && m)
+                {
+                    char path[MAX_PATH]; GetModuleFileNameA(m, path, MAX_PATH);
+                    const char *base = strrchr(path, '\\'); snprintf(out, n, "%s+%lx", base ? base + 1 : path, addr - (DWORD)m);
+                    return true;
+                }
+                return false;
+            };
+            char nm[300];
+            if (name_of(ctx.Eip, nm, sizeof nm)) logf("    eip = %s", nm);
+            for (int i = 0; i < 1024 && shown < 40; ++i)
+            {
+                if (IsBadReadPtr(sp + i, 4)) break;
+                DWORD v = sp[i];
+                MEMORY_BASIC_INFORMATION mbi;
+                if (v > 0x10000 && VirtualQuery(reinterpret_cast<LPCVOID>(v), &mbi, sizeof mbi) &&
+                    (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) && name_of(v, nm, sizeof nm))
+                { logf("    [esp+%03x] %s", i * 4, nm); ++shown; }
+            }
+        }
+        ResumeThread(h); CloseHandle(h);
+    }
+
+    volatile LONG g_wd_stop = 0;
+    HANDLE g_wd_thread = nullptr;
+
+    DWORD WINAPI watchdog(LPVOID)
+    {
+        while (!g_wd_stop)
+        {
+            Sleep(250);
+            if (g_call_active && !g_dumped && GetTickCount() - g_call_start > 1500)
+            {
+                g_dumped = 1;
+                logf("WATCHDOG: render_effects has not returned after 1.5 s (calling thread %lu). Thread stacks:", g_call_tid);
+                HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+                THREADENTRY32 te = {}; te.dwSize = sizeof te;
+                if (snap != INVALID_HANDLE_VALUE && Thread32First(snap, &te))
+                    do { if (te.th32OwnerProcessID == GetCurrentProcessId() && te.th32ThreadID != GetCurrentThreadId()) dump_thread(te.th32ThreadID, te.th32ThreadID == g_call_tid ? "(CALLER)" : ""); } while (Thread32Next(snap, &te));
+                if (snap != INVALID_HANDLE_VALUE) CloseHandle(snap);
+                logf("WATCHDOG: dump done");
+            }
+        }
+    }
+
     void render_effects_now(command_list *cmd, uint64_t view)
     {
+        g_call_tid = GetCurrentThreadId(); g_call_start = GetTickCount(); g_call_active = 1;
         static int once = 0;
         if (!once) { once = 1; logf("runtime %p vtable %p slots[4..12]: %p %p %p %p %p %p %p %p %p", (void *)g_runtime, *(void **)g_runtime, ((void **)*(void **)g_runtime)[4], ((void **)*(void **)g_runtime)[5], ((void **)*(void **)g_runtime)[6], ((void **)*(void **)g_runtime)[7], ((void **)*(void **)g_runtime)[8], ((void **)*(void **)g_runtime)[9], ((void **)*(void **)g_runtime)[10], ((void **)*(void **)g_runtime)[11], ((void **)*(void **)g_runtime)[12]); }
         void **vt = *reinterpret_cast<void ***>(g_runtime);
         reinterpret_cast<render_effects_fn>(vt[10])(g_runtime, cmd, view, view);
+        g_call_active = 0;
     }
 
     void count_draw(uint32_t verts)
@@ -225,7 +293,7 @@ namespace
 extern "C" __declspec(dllexport) const char *NAME = "EqUIGate";
 extern "C" __declspec(dllexport) const char *DESCRIPTION = "Renders ReShade effects before the WoW UI is drawn.";
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)
 {
     switch (reason)
     {
@@ -238,6 +306,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
         g_log = fopen((g_dir + "Logs\\EqUIGate.log").c_str(), "w");
         read_config();
         logf("EqUIGate loaded: Enabled=%d HeavyDraws=%d MinPriorDraws=%d SkipHeavyPasses=%d Diag=%d", g_enabled, g_heavy, g_min_prior, g_skip, g_diag);
+        // watchdog thread disabled: a thread running inside this DLL crashed the game when ReShade unloaded the add-on (twice)
+        // g_wd_thread = CreateThread(nullptr, 0, watchdog, nullptr, 0, nullptr);
         reshade::register_event<reshade::addon_event::init_effect_runtime>(on_init_runtime);
         reshade::register_event<reshade::addon_event::destroy_effect_runtime>(on_destroy_runtime);
         reshade::register_event<reshade::addon_event::draw>(on_draw);
@@ -249,6 +319,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
         break;
     }
     case DLL_PROCESS_DETACH:
+        // ReShade unloads add-ons with FreeLibrary while the process keeps running: the watchdog thread must be gone before the
+        // code it runs is unmapped (it crashed the game at exit otherwise). At process termination the thread is already dead.
+        if (!reserved && g_wd_thread)
+        {
+            g_wd_stop = 1;
+            WaitForSingleObject(g_wd_thread, 2000);
+            CloseHandle(g_wd_thread);
+        }
         reshade::unregister_addon(hModule);
         if (g_log) fclose(g_log);
         break;
